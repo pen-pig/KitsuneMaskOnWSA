@@ -78,6 +78,40 @@ RELEASE_TYPE=$(
 )
 declare -A RELEASE_TYPE_MAP=(["retail"]="retail" ["release preview"]="RP" ["insider slow"]="WIS" ["insider fast"]="WIF")
 COMMAND_LINE=(--arch "$ARCH" --release-type "${RELEASE_TYPE_MAP[$RELEASE_TYPE]}")
+
+# Ask the FE3 service which WSA builds are currently available and let the
+# user pick one. Older builds ship older kernels, which is useful when a
+# pre-built KernelSU/SuKiSU kernel is only published for a specific kernel
+# version.
+PYTHON_VENV_DIR="$(dirname "$PWD")/python3-env"
+if [ -f "$PYTHON_VENV_DIR/bin/activate" ]; then
+    # shellcheck disable=SC1091
+    source "$PYTHON_VENV_DIR/bin/activate" || true
+fi
+WSA_BUILD_LIST=$(python3 listWSABuilds.py 2>/dev/null)
+if [ -n "$WSA_BUILD_LIST" ]; then
+    declare -a WSA_BUILD_ARGS=()
+    while IFS=$'\t' read -r wsa_build wsa_android wsa_kernel; do
+        [ -z "$wsa_build" ] && continue
+        WSA_BUILD_ARGS+=("$wsa_build" "Android $wsa_android, kernel ${wsa_kernel:-unknown}" 'off')
+    done < <(printf '%s\n' "$WSA_BUILD_LIST" | tac)
+    WSA_BUILD_ARGS=("latest" "The newest available build" 'on' "${WSA_BUILD_ARGS[@]}")
+    WSA_BUILD_SEL=$(
+        Radiolist '([title]="WSA build"
+                    [default]="latest")' \
+            "${WSA_BUILD_ARGS[@]}"
+    )
+    if [ -n "$WSA_BUILD_SEL" ] && [ "$WSA_BUILD_SEL" != "latest" ]; then
+        COMMAND_LINE+=(--wsa-build "$WSA_BUILD_SEL")
+    else
+        COMMAND_LINE+=(--android-version "latest")
+    fi
+else
+    COMMAND_LINE+=(--android-version "latest")
+fi
+if [ -f "$PYTHON_VENV_DIR/bin/activate" ]; then
+    deactivate >/dev/null 2>&1 || true
+fi
 if (YesNoBox '([title]="Root" [text]="Do you want to Root WSA?")'); then
     ROOT_SOL=$(
         Radiolist '([title]="Root solution"

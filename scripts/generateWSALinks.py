@@ -18,106 +18,122 @@
 # Copyright (C) 2024 LSPosed Contributors
 #
 
-import html
 import logging
 import re
 import sys
 
 from pathlib import Path
 from threading import Thread
-from typing import Any, OrderedDict
 from xml.dom import minidom
 
-from requests import Session
 from packaging import version
+from requests import Session
 
-
-class Prop(OrderedDict):
-    def __init__(self, props: str = ...) -> None:
-        super().__init__()
-        for i, line in enumerate(props.splitlines(False)):
-            if '=' in line:
-                k, v = line.split('=', 1)
-                self[k] = v
-            else:
-                self[f".{i}"] = line
-
-    def __setattr__(self, __name: str, __value: Any) -> None:
-        self[__name] = __value
-
-    def __repr__(self):
-        return '\n'.join(f'{item}={self[item]}' for item in self)
-
+from wsa_builds import (
+    ANDROID_API,
+    FE3_SECURED_URL,
+    RELEASE_NAME_MAP,
+    RELEASE_TYPES,
+    SOAP_HEADERS,
+    android_version_of,
+    get_cookie,
+    kernel_hint,
+    query_feed,
+    wsa_builds,
+)
 
 logging.captureWarnings(True)
 arch = sys.argv[1]
 
-release_name_map = {"retail": "Retail", "RP": "Release Preview",
-                    "WIS": "Insider Slow", "WIF": "Insider Fast"}
-release_type = sys.argv[2] if sys.argv[2] != "" else "Retail"
-release_name = release_name_map[release_type]
+release_type = sys.argv[2] if sys.argv[2] != "" else "retail"
+if release_type.lower() == "retail":
+    release_type = "retail"
+release_name = RELEASE_NAME_MAP.get(release_type, release_type)
 download_dir = Path.cwd().parent / \
     "download" if sys.argv[3] == "" else Path(sys.argv[3])
 ms_account_conf = download_dir/".ms_account"
 tempScript = sys.argv[4]
 skip_wsa_download = sys.argv[5] == "1" if len(sys.argv) >= 6 else False
-cat_id = '858014f3-3934-4abe-8078-4aa193e74ca8'
+# Optional target: "latest", an Android version (13.0/12.1/11.0) or an exact
+# build number (2407.40000.4.0). Defaults to the newest build.
+target = sys.argv[6] if len(sys.argv) >= 7 else ""
 user = ''
 session = Session()
 session.verify = False
 if ms_account_conf.is_file():
     with open(ms_account_conf, "r") as f:
-        conf = Prop(f.read())
-        user = conf.get('user_code')
+        conf = f.read().splitlines()
+        for line in conf:
+            if line.startswith('user_code='):
+                user = line.split('=', 1)[1]
+                break
 print(
     f"Generating WSA download link: arch={arch} release_type={release_name}\n", flush=True)
-with open(Path.cwd().parent / ("xml/GetCookie.xml"), "r") as f:
-    cookie_content = f.read().format(user)
 
-out = session.post(
-    'https://fe3.delivery.mp.microsoft.com/ClientWebService/client.asmx',
-    data=cookie_content,
-    headers={'Content-Type': 'application/soap+xml; charset=utf-8'}
-)
-doc = minidom.parseString(out.text)
-cookie = doc.getElementsByTagName('EncryptedData')[0].firstChild.nodeValue
+xml_dir = Path.cwd().parent / "xml"
+cookie = get_cookie(session, xml_dir, user)
 
-with open(Path.cwd().parent / "xml/WUIDRequest.xml", "r") as f:
-    cat_id_content = f.read().format(user, cookie, cat_id, release_type)
+feed_cache = {}
 
-out = session.post(
-    'https://fe3.delivery.mp.microsoft.com/ClientWebService/client.asmx',
-    data=cat_id_content,
-    headers={'Content-Type': 'application/soap+xml; charset=utf-8'}
-)
 
-doc = minidom.parseString(html.unescape(out.text))
+def feed(channel):
+    if channel not in feed_cache:
+        feed_cache[channel] = query_feed(session, xml_dir, user, cookie, channel)
+    return feed_cache[channel]
 
-filenames = {}
-for node in doc.getElementsByTagName('ExtendedUpdateInfo')[0].getElementsByTagName('Updates')[0].getElementsByTagName('Update'):
-    node_xml = node.getElementsByTagName('Xml')[0]
-    node_files = node_xml.getElementsByTagName('Files')
-    if not node_files:
-        continue
-    else:
-        for node_file in node_files[0].getElementsByTagName('File'):
-            if node_file.hasAttribute('InstallerSpecificIdentifier') and node_file.hasAttribute('FileName'):
-                filenames[node.getElementsByTagName('ID')[0].firstChild.nodeValue] = (f"{node_file.attributes['InstallerSpecificIdentifier'].value}_{node_file.attributes['FileName'].value}",
-                                                                                      node_xml.getElementsByTagName('ExtendedProperties')[0].attributes['PackageIdentityName'].value)
 
-identities = {}
-for node in doc.getElementsByTagName('NewUpdates')[0].getElementsByTagName('UpdateInfo'):
-    node_xml = node.getElementsByTagName('Xml')[0]
-    if not node_xml.getElementsByTagName('SecuredFragment'):
-        continue
-    else:
-        id = node.getElementsByTagName('ID')[0].firstChild.nodeValue
-        update_identity = node_xml.getElementsByTagName('UpdateIdentity')[0]
-        if id in filenames:
-            fileinfo = filenames[id]
-            if fileinfo[0] not in identities:
-                identities[fileinfo[0]] = ([update_identity.attributes['UpdateID'].value,
-                                            update_identity.attributes['RevisionNumber'].value], fileinfo[1])
+def builds_of(channel):
+    return wsa_builds(feed(channel))
+
+
+def pick(builds):
+    """Return the build of ``builds`` matching the requested target."""
+    if not builds:
+        return ""
+    if target in ("", "latest", "newest"):
+        return max(builds, key=version.parse)
+    if re.fullmatch(r"\d{4}\.\d{5}\.\d{1,}\.\d{1,}", target):
+        return target if target in builds else ""
+    wanted = target if target.count(".") == 1 else target + ".0"
+    candidates = [b for b in builds if android_version_of(b) == wanted]
+    return max(candidates, key=version.parse) if candidates else ""
+
+
+if target and target not in ("latest", "newest", "") and not re.fullmatch(
+        r"\d{4}\.\d{5}\.\d{1,}\.\d{1,}", target):
+    wanted = target if target.count(".") == 1 else target + ".0"
+    if wanted not in ANDROID_API:
+        raise SystemExit(f"ERROR: Unknown Android version: {target}")
+
+# The requested channel is preferred, but the retail channel only exposes the
+# newest build, so the other channels are used as a fallback.
+channel = ""
+wsa_build_ver = ""
+for candidate in [release_type] + [c for c in RELEASE_TYPES if c != release_type]:
+    wsa_build_ver = pick(builds_of(candidate))
+    if wsa_build_ver:
+        channel = candidate
+        break
+
+if not wsa_build_ver:
+    if skip_wsa_download:
+        print("WARN: No matching WSA build found, only the dependencies are downloaded", flush=True)
+        sys.exit(0)
+    print("ERROR: No WSA build matching the request is available.", flush=True)
+    known = {}
+    for c in RELEASE_TYPES:
+        for b in builds_of(c):
+            known[b] = c
+    print("Available WSA builds:", flush=True)
+    for b in sorted(known, key=version.parse):
+        print(f"  {b}  (Android {android_version_of(b)}, kernel {kernel_hint(b) or 'unknown'})", flush=True)
+    sys.exit(1)
+
+if channel != release_type:
+    print(f"Selected build {wsa_build_ver} from the "
+          f"{RELEASE_NAME_MAP.get(channel, channel)} channel", flush=True)
+
+identities = feed(channel)
 
 with open(Path.cwd().parent / "xml/FE3FileUrl.xml", "r") as f:
     FE3_file_content = f.read()
@@ -131,9 +147,9 @@ download_files = {}
 
 def send_req(i, v, out_file_name):
     out = session.post(
-        'https://fe3.delivery.mp.microsoft.com/ClientWebService/client.asmx/secured',
-        data=FE3_file_content.format(user, i, v, release_type),
-        headers={'Content-Type': 'application/soap+xml; charset=utf-8'}
+        FE3_SECURED_URL,
+        data=FE3_file_content.format(user, i, v, channel),
+        headers=SOAP_HEADERS
     )
     doc = minidom.parseString(out.text)
     for l in doc.getElementsByTagName("FileLocation"):
@@ -143,15 +159,6 @@ def send_req(i, v, out_file_name):
 
 
 threads = []
-wsa_build_ver = 0
-for filename, values in identities.items():
-    if re.match(rf"MicrosoftCorporationII\.WindowsSubsystemForAndroid_.*\.msixbundle", filename):
-        tmp_wsa_build_ver = re.search(
-            r'\d{4}.\d{5}.\d{1,}.\d{1,}', filename).group()
-        if (wsa_build_ver == 0):
-            wsa_build_ver = tmp_wsa_build_ver
-        elif version.parse(wsa_build_ver) < version.parse(tmp_wsa_build_ver):
-            wsa_build_ver = tmp_wsa_build_ver
 for filename, values in identities.items():
     if re.match(rf"Microsoft\.UI\.Xaml\..*_{arch}_.*\.appx", filename):
         out_file_name = f"{values[1]}_{arch}.appx"
@@ -167,11 +174,6 @@ for filename, values in identities.items():
             r'\d{4}.\d{5}.\d{1,}.\d{1,}', filename).group()
         if (wsa_build_ver != tmp_wsa_build_ver):
             continue
-        version_splitted = wsa_build_ver.split(".")
-        major_ver = version_splitted[0]
-        minor_ver = version_splitted[1]
-        build_ver = version_splitted[2]
-        revision_ver = version_splitted[3]
         out_file_name = f"wsa-{release_type}.zip"
         out_file = download_dir / out_file_name
     else:
@@ -184,6 +186,7 @@ for filename, values in identities.items():
 for th in threads:
     th.join()
 print(f'WSA Build Version={wsa_build_ver}\n', flush=True)
+print(f'WSA Android Version={android_version_of(wsa_build_ver)}\n', flush=True)
 for key, value in download_files.items():
     print(f"download link: {value}\npath: {download_dir / key}\n", flush=True)
     tmpdownlist.writelines(value + '\n')

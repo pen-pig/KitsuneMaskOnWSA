@@ -69,6 +69,11 @@ This fork adds extra root methods to [MagiskOnWSALocal](https://github.com/LSPos
 3. Run `cd KitsuneMaskOnWSALocal`.
 4. Run `./scripts/run.sh`.
 5. Select the WSA version and its architecture (mostly x64).
+   - `run.sh` lists every WSA build that Microsoft currently publishes, together
+     with its Android version and its Linux kernel version. Pick the build you
+     want, or keep `The newest available build`.
+   - Older builds ship older kernels, which matters when a pre-built
+     KernelSU/SuKiSU kernel is only published for a specific kernel version.
 6. Select the version of Magisk.
 7. Choose which brand of GApps you want to install:
    - MindTheGapps
@@ -128,6 +133,45 @@ by the user:
 - put `apatch.zip` (or `kernel-WSA-<abi>-<version>.zip`) in `download/`,
 - the zip must contain `bzImage` (x64) or `Image` (arm64),
 - APatch only supports the **ARM64** architecture, `x64` builds are rejected.
+
+---
+
+## Choosing the WSA version
+
+`run.sh` queries the Microsoft FE3 service and shows every WSA build that is
+currently published, with the Android version and the Linux kernel version it
+ships:
+
+```bash
+./scripts/listWSABuilds.py
+```
+
+```
+2305.40000.4.0	13.0	5.15.94
+2306.40000.4.0	13.0	5.15.104
+...
+2407.40000.4.0	13.0	5.15.104
+```
+
+`build.sh` accepts two options to select the build:
+
+| Option | Meaning |
+| --- | --- |
+| `--android-version 13.0` | the newest WSA build of that Android version (`13.0`, `12.1`, `11.0`) |
+| `--wsa-build 2305.40000.4.0` | an exact build number, takes precedence over `--android-version` |
+
+```bash
+./scripts/build.sh --release-type RP --wsa-build 2305.40000.4.0
+```
+
+The default is the newest published build. If the requested version is not
+published anymore, the script prints the list of the available builds and
+exits with an error.
+
+Note that Microsoft only publishes a single build on the Retail channel; the
+older builds are served by the Release Preview and Insider channels. The
+script therefore falls back to those channels automatically when the requested
+build is not offered by the selected one.
 
 ---
 

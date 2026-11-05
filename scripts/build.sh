@@ -99,6 +99,8 @@ trap abort INT TERM
 default() {
     ARCH=x64
     RELEASE_TYPE=retail
+    ANDROID_VERSION=latest
+    WSA_BUILD=
     MAGISK_VER=stable
     ROOT_SOL=magisk
     COMPRESS_FORMAT=none
@@ -120,6 +122,14 @@ RELEASE_TYPE_MAP=(
     "RP"
     "WIS"
     "WIF"
+)
+
+ANDROID_VERSION_MAP=(
+    "13.0"
+    "12.1"
+    "11.0"
+    "10.0"
+    "latest"
 )
 
 MAGISK_VER_MAP=(
@@ -168,6 +178,16 @@ Usage:
                         Possible values: $(ARR_TO_STR "${RELEASE_TYPE_MAP[@]}")
                         Default: $RELEASE_TYPE
 
+    --android-version   Android version of WSA.
+                        The newest WSA build of that Android version is used.
+
+                        Possible values: $(ARR_TO_STR "${ANDROID_VERSION_MAP[@]}")
+                        Default: $ANDROID_VERSION
+
+    --wsa-build         Exact WSA build number, e.g. 2407.40000.4.0.
+                        Takes precedence over --android-version.
+                        Default: $WSA_BUILD
+
     --magisk-ver        Magisk version.
 
                         Possible values: $(ARR_TO_STR "${MAGISK_VER_MAP[@]}")
@@ -204,6 +224,8 @@ ARGUMENT_LIST=(
     "compress-format:"
     "arch:"
     "release-type:"
+    "android-version:"
+    "wsa-build:"
     "root-sol:"
     "magisk-ver:"
     "magisk-custom"
@@ -239,6 +261,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --release-type)
             RELEASE_TYPE="$2"
+            shift 2
+            ;;
+        --android-version)
+            ANDROID_VERSION="$2"
+            shift 2
+            ;;
+        --wsa-build)
+            WSA_BUILD="$2"
             shift 2
             ;;
         --root-sol)
@@ -311,6 +341,10 @@ check_list() {
 
 check_list "$ARCH" "Architecture" "${ARCH_MAP[@]}"
 check_list "$RELEASE_TYPE" "Release Type" "${RELEASE_TYPE_MAP[@]}"
+check_list "$ANDROID_VERSION" "Android Version" "${ANDROID_VERSION_MAP[@]}"
+if [ -n "$WSA_BUILD" ] && ! [[ "$WSA_BUILD" =~ ^[0-9]{4}\.[0-9]{5}\.[0-9]+\.[0-9]+$ ]]; then
+    exit_with_message "Invalid WSA build number: $WSA_BUILD"
+fi
 check_list "$MAGISK_VER" "Magisk Version" "${MAGISK_VER_MAP[@]}"
 check_list "$ROOT_SOL" "Root Solution" "${ROOT_SOL_MAP[@]}"
 check_list "$COMPRESS_FORMAT" "Compress Format" "${COMPRESS_FORMAT_MAP[@]}"
@@ -341,7 +375,7 @@ fi
     source "$PYTHON_VENV_DIR/bin/activate" || abort "Failed to activate virtual environment, please re-run install_deps.sh"
 }
 declare -A RELEASE_NAME_MAP=(["retail"]="Retail" ["RP"]="Release Preview" ["WIS"]="Insider Slow" ["WIF"]="Insider Fast")
-declare -A ANDROID_API_MAP=(["30"]="11.0" ["32"]="12.1" ["33"]="13.0")
+declare -A ANDROID_API_MAP=(["29"]="10.0" ["30"]="11.0" ["32"]="12.1" ["33"]="13.0")
 declare -A ARCH_NAME_MAP=(["x64"]="x86_64" ["arm64"]="arm64")
 RELEASE_NAME=${RELEASE_NAME_MAP[$RELEASE_TYPE]} || abort
 echo -e "INFO: Release Name: $RELEASE_NAME\n"
@@ -417,11 +451,16 @@ update_ksu_zip_name() {
 
 if [ -z ${OFFLINE+x} ]; then
     echo "Generating WSA Download Links"
+    if [ -n "$WSA_BUILD" ]; then
+        WSA_TARGET="$WSA_BUILD"
+    else
+        WSA_TARGET="$ANDROID_VERSION"
+    fi
     if [ -z ${SKIP_DOWN_WSA+x} ]; then
-        python3 generateWSALinks.py "$ARCH" "$RELEASE_TYPE" "$DOWNLOAD_DIR" "$DOWNLOAD_CONF_NAME" || abort
+        python3 generateWSALinks.py "$ARCH" "$RELEASE_TYPE" "$DOWNLOAD_DIR" "$DOWNLOAD_CONF_NAME" "" "$WSA_TARGET" || abort
         echo "Downloading WSA"
     else
-        python3 generateWSALinks.py "$ARCH" "$RELEASE_TYPE" "$DOWNLOAD_DIR" "$DOWNLOAD_CONF_NAME" "$SKIP_DOWN_WSA" || abort
+        python3 generateWSALinks.py "$ARCH" "$RELEASE_TYPE" "$DOWNLOAD_DIR" "$DOWNLOAD_CONF_NAME" "$SKIP_DOWN_WSA" "$WSA_TARGET" || abort
         echo "Skip download WSA, downloading WSA depends"
     fi
     if ! aria2c --no-conf --log-level=info --log="$DOWNLOAD_DIR/aria2_download.log" -x16 -s16 -j5 -c -R -m0 \
@@ -444,9 +483,18 @@ if [ -f "$WSA_ZIP_PATH" ]; then
 else
     abort "The WSA zip package does not exist"
 fi
-if [[ "$WSA_MAJOR_VER" -lt 2211 ]]; then
+# Derive the Android API level from the WSA build that was actually
+# downloaded (the YYMM part of the build number).
+if [[ "$WSA_MAJOR_VER" -ge 2211 ]]; then
+    ANDROID_API=33
+elif [[ "$WSA_MAJOR_VER" -ge 2204 ]]; then
     ANDROID_API=32
+elif [[ "$WSA_MAJOR_VER" -ge 2106 ]]; then
+    ANDROID_API=30
+else
+    ANDROID_API=29
 fi
+update_gapps_files_name
 if [ "$ROOT_SOL" = "kernelsu" ] || [ "$ROOT_SOL" = "sukisu" ] || [ "$ROOT_SOL" = "apatch" ]; then
     case "$ROOT_SOL" in
         kernelsu) KSU_LINK_SCRIPT=generateKernelSULink.py ;;
