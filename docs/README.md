@@ -147,17 +147,22 @@ ships:
 ```
 
 ```
+# Available Android versions: 13.0
 2305.40000.4.0	13.0	5.15.94
 2306.40000.4.0	13.0	5.15.104
 ...
 2407.40000.4.0	13.0	5.15.104
 ```
 
+Only the versions Microsoft actually publishes are listed. Microsoft
+discontinued WSA in March 2025, the last release is `2407.40000.4.0` which is
+based on Android 13, so that is currently the only Android version available.
+
 `build.sh` accepts two options to select the build:
 
 | Option | Meaning |
 | --- | --- |
-| `--android-version 13.0` | the newest WSA build of that Android version (`13.0`, `12.1`, `11.0`) |
+| `--android-version 13.0` | the newest WSA build of that Android version |
 | `--wsa-build 2305.40000.4.0` | an exact build number, takes precedence over `--android-version` |
 
 ```bash
@@ -165,7 +170,7 @@ ships:
 ```
 
 The default is the newest published build. If the requested version is not
-published anymore, the script prints the list of the available builds and
+published, the script prints the versions and builds that are available and
 exits with an error.
 
 Note that Microsoft only publishes a single build on the Retail channel; the

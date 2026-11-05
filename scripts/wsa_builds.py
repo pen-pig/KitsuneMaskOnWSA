@@ -32,17 +32,24 @@ RELEASE_NAME_MAP = {"retail": "Retail", "RP": "Release Preview",
                     "WIS": "Insider Slow", "WIF": "Insider Fast"}
 WSA_BUNDLE_RE = re.compile(r"MicrosoftCorporationII\.WindowsSubsystemForAndroid_.*\.msixbundle")
 BUILD_RE = re.compile(r"\d{4}\.\d{5}\.\d{1,}\.\d{1,}")
+# The last WSA build that Microsoft published. WSA was discontinued after it,
+# so no newer Android release is known to this script.
+LAST_KNOWN_YYMM = 2407
 # Android version -> API level of the GApps images shipped by WSA-Addon
 ANDROID_API = {"13.0": "33", "12.1": "32", "11.0": "30", "10.0": "29"}
+UNKNOWN_ANDROID = "unknown"
 
 
 def android_version_of(build: str) -> str:
     """Return the Android version shipped by a WSA build.
 
     The build number is ``YYMM.40000.rev.build``, the ``YYMM`` part tells
-    which Android release the build is based on.
+    which Android release the build is based on. Builds that are newer than
+    the last known one are reported as unknown instead of guessing.
     """
     yymm = int(build.split(".")[0])
+    if yymm > LAST_KNOWN_YYMM:
+        return UNKNOWN_ANDROID
     if yymm >= 2211:
         return "13.0"
     if yymm >= 2204:
@@ -50,6 +57,22 @@ def android_version_of(build: str) -> str:
     if yymm >= 2106:
         return "11.0"
     return "10.0"
+
+
+def api_of(build: str) -> str:
+    """Return the Android API level of a WSA build (empty if unknown)."""
+    return ANDROID_API.get(android_version_of(build), "")
+
+
+def android_versions_of(builds) -> list:
+    """Return the Android versions that are actually available.
+
+    Only the versions of the given builds are returned, so versions that
+    Microsoft does not publish any longer are never offered.
+    """
+    versions = {android_version_of(b) for b in builds}
+    versions.discard(UNKNOWN_ANDROID)
+    return sorted(versions, key=lambda v: [int(p) for p in v.split(".")])
 
 
 def kernel_hint(build: str) -> str:

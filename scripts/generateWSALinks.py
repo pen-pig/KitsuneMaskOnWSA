@@ -30,12 +30,12 @@ from packaging import version
 from requests import Session
 
 from wsa_builds import (
-    ANDROID_API,
     FE3_SECURED_URL,
     RELEASE_NAME_MAP,
     RELEASE_TYPES,
     SOAP_HEADERS,
     android_version_of,
+    android_versions_of,
     get_cookie,
     kernel_hint,
     query_feed,
@@ -102,8 +102,8 @@ def pick(builds):
 if target and target not in ("latest", "newest", "") and not re.fullmatch(
         r"\d{4}\.\d{5}\.\d{1,}\.\d{1,}", target):
     wanted = target if target.count(".") == 1 else target + ".0"
-    if wanted not in ANDROID_API:
-        raise SystemExit(f"ERROR: Unknown Android version: {target}")
+    if not re.fullmatch(r"\d+\.\d+", wanted):
+        raise SystemExit(f"ERROR: Invalid Android version: {target}")
 
 # The requested channel is preferred, but the retail channel only exposes the
 # newest build, so the other channels are used as a fallback.
@@ -116,14 +116,18 @@ for candidate in [release_type] + [c for c in RELEASE_TYPES if c != release_type
         break
 
 if not wsa_build_ver:
-    if skip_wsa_download:
-        print("WARN: No matching WSA build found, only the dependencies are downloaded", flush=True)
-        sys.exit(0)
-    print("ERROR: No WSA build matching the request is available.", flush=True)
     known = {}
     for c in RELEASE_TYPES:
         for b in builds_of(c):
             known[b] = c
+    if skip_wsa_download:
+        print("WARN: No matching WSA build found, only the dependencies are downloaded", flush=True)
+        sys.exit(0)
+    print("ERROR: No WSA build matching the request is available.", flush=True)
+    # Only offer what Microsoft actually publishes, nothing else.
+    available = android_versions_of(known)
+    if available:
+        print(f"Available Android versions: {', '.join(available)}", flush=True)
     print("Available WSA builds:", flush=True)
     for b in sorted(known, key=version.parse):
         print(f"  {b}  (Android {android_version_of(b)}, kernel {kernel_hint(b) or 'unknown'})", flush=True)

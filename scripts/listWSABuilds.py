@@ -27,6 +27,7 @@ from requests import Session
 from wsa_builds import (
     RELEASE_TYPES,
     android_version_of,
+    android_versions_of,
     get_cookie,
     kernel_hint,
     query_feed,
@@ -47,5 +48,8 @@ for channel in RELEASE_TYPES:
     except Exception as e:  # noqa: BLE001 - a broken channel must not hide the others
         print(f"WARN: Failed to query the {channel} channel: {e}", file=sys.stderr)
 
+available = android_versions_of(builds)
+if available:
+    print(f"# Available Android versions: {', '.join(available)}", file=sys.stderr)
 for build in sorted(builds, key=version.parse):
     print(f"{build}\t{android_version_of(build)}\t{kernel_hint(build)}")

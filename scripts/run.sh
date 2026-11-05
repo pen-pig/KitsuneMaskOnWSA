@@ -80,29 +80,59 @@ declare -A RELEASE_TYPE_MAP=(["retail"]="retail" ["release preview"]="RP" ["insi
 COMMAND_LINE=(--arch "$ARCH" --release-type "${RELEASE_TYPE_MAP[$RELEASE_TYPE]}")
 
 # Ask the FE3 service which WSA builds are currently available and let the
-# user pick one. Older builds ship older kernels, which is useful when a
-# pre-built KernelSU/SuKiSU kernel is only published for a specific kernel
-# version.
+# user pick one. Only the versions Microsoft actually publishes are offered.
+# Older builds ship older kernels, which is useful when a pre-built
+# KernelSU/SuKiSU kernel is only published for a specific kernel version.
 PYTHON_VENV_DIR="$(dirname "$PWD")/python3-env"
 if [ -f "$PYTHON_VENV_DIR/bin/activate" ]; then
     # shellcheck disable=SC1091
     source "$PYTHON_VENV_DIR/bin/activate" || true
 fi
 WSA_BUILD_LIST=$(python3 listWSABuilds.py 2>/dev/null)
+WSA_BUILD_SEL=""
+ANDROID_VERSION_SEL=""
 if [ -n "$WSA_BUILD_LIST" ]; then
-    declare -a WSA_BUILD_ARGS=()
+    # Pick the Android version first, then the exact build of that version.
+    # The keys of the associative array must not look like numbers, so the
+    # version is stored with a "v" prefix.
+    declare -a ANDROID_VERSION_ARGS=()
+    declare -A ANDROID_VERSION_BUILDS=()
     while IFS=$'\t' read -r wsa_build wsa_android wsa_kernel; do
         [ -z "$wsa_build" ] && continue
-        WSA_BUILD_ARGS+=("$wsa_build" "Android $wsa_android, kernel ${wsa_kernel:-unknown}" 'off')
-    done < <(printf '%s\n' "$WSA_BUILD_LIST" | tac)
-    WSA_BUILD_ARGS=("latest" "The newest available build" 'on' "${WSA_BUILD_ARGS[@]}")
-    WSA_BUILD_SEL=$(
-        Radiolist '([title]="WSA build"
-                    [default]="latest")' \
-            "${WSA_BUILD_ARGS[@]}"
-    )
-    if [ -n "$WSA_BUILD_SEL" ] && [ "$WSA_BUILD_SEL" != "latest" ]; then
-        COMMAND_LINE+=(--wsa-build "$WSA_BUILD_SEL")
+        key="v$wsa_android"
+        if [ -z "${ANDROID_VERSION_BUILDS[$key]+x}" ]; then
+            ANDROID_VERSION_ARGS+=("$wsa_android" "Android $wsa_android" 'off')
+            ANDROID_VERSION_BUILDS[$key]=""
+        fi
+        ANDROID_VERSION_BUILDS[$key]+="$wsa_build"$'\t'"${wsa_kernel:-unknown}"$'\n'
+    done < <(printf '%s\n' "$WSA_BUILD_LIST")
+    if [ ${#ANDROID_VERSION_ARGS[@]} -gt 0 ]; then
+        ANDROID_VERSION_SEL=$(
+            Radiolist '([title]="WSA Android version"
+                        [default]="latest")' \
+                    'latest' "The newest available build" 'on' \
+                    "${ANDROID_VERSION_ARGS[@]}"
+        )
+        if [ -n "$ANDROID_VERSION_SEL" ] && [ "$ANDROID_VERSION_SEL" != "latest" ]; then
+            declare -a BUILD_ARGS=()
+            while IFS=$'\t' read -r wsa_build wsa_kernel; do
+                [ -z "$wsa_build" ] && continue
+                BUILD_ARGS+=("$wsa_build" "build $wsa_build, kernel $wsa_kernel" 'off')
+            done < <(printf '%s' "${ANDROID_VERSION_BUILDS[v$ANDROID_VERSION_SEL]}" | tac)
+            WSA_BUILD_SEL=$(
+                Radiolist '([title]="WSA build"
+                            [default]="latest")' \
+                        'latest' "The newest build of Android $ANDROID_VERSION_SEL" 'on' \
+                        "${BUILD_ARGS[@]}"
+            )
+        fi
+        if [ -n "$WSA_BUILD_SEL" ] && [ "$WSA_BUILD_SEL" != "latest" ]; then
+            COMMAND_LINE+=(--wsa-build "$WSA_BUILD_SEL")
+        elif [ -n "$ANDROID_VERSION_SEL" ] && [ "$ANDROID_VERSION_SEL" != "latest" ]; then
+            COMMAND_LINE+=(--android-version "$ANDROID_VERSION_SEL")
+        else
+            COMMAND_LINE+=(--android-version "latest")
+        fi
     else
         COMMAND_LINE+=(--android-version "latest")
     fi

@@ -124,14 +124,6 @@ RELEASE_TYPE_MAP=(
     "WIF"
 )
 
-ANDROID_VERSION_MAP=(
-    "13.0"
-    "12.1"
-    "11.0"
-    "10.0"
-    "latest"
-)
-
 MAGISK_VER_MAP=(
     "stable"
     "beta"
@@ -180,8 +172,10 @@ Usage:
 
     --android-version   Android version of WSA.
                         The newest WSA build of that Android version is used.
+                        Run ./listWSABuilds.py to see which versions Microsoft
+                        currently publishes.
 
-                        Possible values: $(ARR_TO_STR "${ANDROID_VERSION_MAP[@]}")
+                        Possible values: latest, or an Android version like 13.0
                         Default: $ANDROID_VERSION
 
     --wsa-build         Exact WSA build number, e.g. 2407.40000.4.0.
@@ -341,7 +335,10 @@ check_list() {
 
 check_list "$ARCH" "Architecture" "${ARCH_MAP[@]}"
 check_list "$RELEASE_TYPE" "Release Type" "${RELEASE_TYPE_MAP[@]}"
-check_list "$ANDROID_VERSION" "Android Version" "${ANDROID_VERSION_MAP[@]}"
+if [ -n "$ANDROID_VERSION" ] && [ "$ANDROID_VERSION" != "latest" ] &&
+    ! [[ "$ANDROID_VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    exit_with_message "Invalid Android version: $ANDROID_VERSION"
+fi
 if [ -n "$WSA_BUILD" ] && ! [[ "$WSA_BUILD" =~ ^[0-9]{4}\.[0-9]{5}\.[0-9]+\.[0-9]+$ ]]; then
     exit_with_message "Invalid WSA build number: $WSA_BUILD"
 fi
@@ -484,15 +481,14 @@ else
     abort "The WSA zip package does not exist"
 fi
 # Derive the Android API level from the WSA build that was actually
-# downloaded (the YYMM part of the build number).
-if [[ "$WSA_MAJOR_VER" -ge 2211 ]]; then
+# downloaded, so it always matches the build in use.
+ANDROID_API=$(python3 -c "from wsa_builds import api_of; print(api_of('$WSA_VER'))")
+if [ -z "$ANDROID_API" ]; then
     ANDROID_API=33
-elif [[ "$WSA_MAJOR_VER" -ge 2204 ]]; then
-    ANDROID_API=32
-elif [[ "$WSA_MAJOR_VER" -ge 2106 ]]; then
-    ANDROID_API=30
-else
-    ANDROID_API=29
+    if [ "$HAS_GAPPS" ]; then
+        abort "The Android version of build $WSA_VER is unknown, GApps cannot be selected"
+    fi
+    echo "WARN: The Android version of build $WSA_VER is unknown, assuming API $ANDROID_API"
 fi
 update_gapps_files_name
 if [ "$ROOT_SOL" = "kernelsu" ] || [ "$ROOT_SOL" = "sukisu" ] || [ "$ROOT_SOL" = "apatch" ]; then
