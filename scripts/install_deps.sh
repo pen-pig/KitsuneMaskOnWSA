@@ -44,6 +44,7 @@ check_dependencies() {
     command -v aria2c >/dev/null 2>&1 || NEED_INSTALL+=("aria2")
     command -v 7z >/dev/null 2>&1 || NEED_INSTALL+=("p7zip-full")
     command -v unzip >/dev/null 2>&1 || NEED_INSTALL+=("unzip")
+    command -v zip >/dev/null 2>&1 || NEED_INSTALL+=("zip")
 }
 check_dependencies
 osrel=$(sed -n '/^ID_LIKE=/s/^.*=//p' /etc/os-release)
@@ -149,7 +150,12 @@ if [ -n "${NEED_INSTALL[*]}" ]; then
         {
             NEED_INSTALL_FIX=${NEED_INSTALL_FIX//whiptail/dialog} 2>&1
             NEED_INSTALL_FIX=${NEED_INSTALL_FIX//python3-pip/dev-python/pip} 2>&1
-            NEED_INSTALL_FIX=${NEED_INSTALL_FIX//p7zip-full/p7zip} 2>&1
+            # "zip" is a substring of "p7zip-full" and "unzip", hide both first
+            NEED_INSTALL_FIX=${NEED_INSTALL_FIX//p7zip-full/__P7ZIP__} 2>&1
+            NEED_INSTALL_FIX=${NEED_INSTALL_FIX//unzip/__UNZIP__} 2>&1
+            NEED_INSTALL_FIX=${NEED_INSTALL_FIX//zip/app-arch/zip} 2>&1
+            NEED_INSTALL_FIX=${NEED_INSTALL_FIX//__P7ZIP__/p7zip} 2>&1
+            NEED_INSTALL_FIX=${NEED_INSTALL_FIX//__UNZIP__/unzip} 2>&1
         } >>/dev/null
 
         readarray -td ' ' NEED_INSTALL <<<"$NEED_INSTALL_FIX "

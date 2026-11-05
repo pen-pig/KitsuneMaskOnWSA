@@ -88,7 +88,11 @@ if (YesNoBox '([title]="Root" [text]="Do you want to Root WSA?")'); then
             'apatch' "APatch (put apatch.zip in download/)" 'off'
     )
     COMMAND_LINE+=(--root-sol "$ROOT_SOL")
-if [ "$ROOT_SOL" = "kernelsu" ] || [ "$ROOT_SOL" = "sukisu" ] || [ "$ROOT_SOL" = "apatch" ]; then
+if [ "$ROOT_SOL" = "apatch" ] && [ "$ARCH" != "arm64" ]; then
+    DialogBox "([title]='APatch' [text]='APatch only supports the ARM64 architecture.\nPlease select the AArch64 build arch.')"
+    exit 1
+fi
+if [ "$ROOT_SOL" = "kernelsu" ] || [ "$ROOT_SOL" = "sukisu" ]; then
     if (YesNoBox '([title]="Auto-create custom kernel" [text]="No pre-built kernel found?\nAuto-download kernel from WSABuilds and package it.")'); then
         COMMAND_LINE+=(--auto-kernel)
     fi

@@ -26,6 +26,9 @@ from pathlib import Path
 magisk_ver = sys.argv[1]
 download_dir = (Path.cwd().parent / "download" if sys.argv[2] == "" else Path(sys.argv[2]))
 tempScript = sys.argv[3]
+# "cust_only": the Magisk package is provided by the user, only the
+# lsp_cust.img needed by the Magisk integration has to be downloaded.
+cust_only = len(sys.argv) > 4 and sys.argv[4] == "cust_only"
 download_files = {}
 cdn_hosts = [
     "cdn.jsdelivr.net",
@@ -37,7 +40,7 @@ print(f"Generating Magisk download link: release type={magisk_ver}", flush=True)
 magisk_link = None
 if not magisk_ver:
     magisk_ver = "stable"
-if (
+if not cust_only and (
     magisk_ver == "stable"
     or magisk_ver == "beta"
     or magisk_ver == "canary"

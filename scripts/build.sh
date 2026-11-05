@@ -35,7 +35,9 @@ if [ "$TMPDIR" ] && [ ! -d "$TMPDIR" ]; then
 fi
 WORK_DIR=$(mktemp -d -t wsa-build-XXXXXXXXXX_) || exit 1
 
-DOWNLOAD_DIR=../download
+# Use an absolute path so that the paths stay valid after a `cd` into a
+# subdirectory (e.g. while packaging the kernel zip).
+DOWNLOAD_DIR="$(dirname "$SCRIPT_DIR")/download"
 DOWNLOAD_CONF_NAME=download.list
 PYTHON_VENV_DIR="$(dirname "$PWD")/python3-env"
 
@@ -65,7 +67,12 @@ clean_download() {
             rm -f "${WSA_ZIP_PATH:?}"
         fi
         if [ "$CLEAN_DOWNLOAD_MAGISK" ]; then
-            rm -f "${MAGISK_PATH:?}"
+            # Never delete files outside of the download directory, the
+            # custom Magisk may be a user provided file in the repository.
+            case "$MAGISK_PATH" in
+                "$DOWNLOAD_DIR"/*) rm -f "${MAGISK_PATH:?}" ;;
+                *) ;;
+            esac
         fi
         if [ "$CLEAN_DOWNLOAD_GAPPS" ]; then
             rm -f "${GAPPS_IMAGE_PATH:?}"
@@ -325,6 +332,9 @@ if [ "$HAS_GAPPS" ]; then
             ;;
     esac
 fi
+if [ "$ROOT_SOL" = "apatch" ] && [ "$ARCH" != "arm64" ]; then
+    abort "APatch only supports the ARM64 architecture"
+fi
 
 # shellcheck disable=SC1091
 [ -f "$PYTHON_VENV_DIR/bin/activate" ] && {
@@ -342,19 +352,25 @@ xaml_PATH="$DOWNLOAD_DIR/Microsoft.UI.Xaml.2.8_$ARCH.appx"
 MAGISK_ZIP=magisk-$MAGISK_VER.zip
 MAGISK_PATH=$DOWNLOAD_DIR/$MAGISK_ZIP
 CUST_PATH="$DOWNLOAD_DIR/cust.img"
+CUSTOM_APKS_DIR="$SCRIPT_DIR/../apks"
 if [ "$CUSTOM_MAGISK" ]; then
-    CUSTOM_APKS_DIR="$SCRIPT_DIR/../apks"
-    CUSTOM_APK=app-$MAGISK_VER.apk
-    MAGISK_PATH="$CUSTOM_APKS_DIR/$CUSTOM_APK"
-    if [ ! -f "$MAGISK_PATH" ]; then
-        echo "Custom Magisk $CUSTOM_APK not found in $CUSTOM_APKS_DIR"
-        MAGISK_ZIP=magisk-$MAGISK_VER.zip
-        echo -e "Fallback to $MAGISK_ZIP\n"
-        MAGISK_PATH="$CUSTOM_APKS_DIR/$MAGISK_ZIP"
-        if [ ! -f "$MAGISK_PATH" ]; then
-            abort "Custom Magisk not found\nPlease put app-$MAGISK_VER.apk or magisk-$MAGISK_VER.zip in $CUSTOM_APKS_DIR"
+    # Look for the custom Magisk package, first in the download directory
+    # (upstream behaviour), then in the apks directory of the repository.
+    MAGISK_PATH=""
+    for candidate in \
+        "$DOWNLOAD_DIR/magisk-$MAGISK_VER.zip" \
+        "$DOWNLOAD_DIR/app-$MAGISK_VER.apk" \
+        "$CUSTOM_APKS_DIR/app-$MAGISK_VER.apk" \
+        "$CUSTOM_APKS_DIR/magisk-$MAGISK_VER.zip"; do
+        if [ -f "$candidate" ]; then
+            MAGISK_PATH="$candidate"
+            break
         fi
+    done
+    if [ -z "$MAGISK_PATH" ]; then
+        abort "Custom Magisk not found\nPlease put app-$MAGISK_VER.apk or magisk-$MAGISK_VER.zip in $DOWNLOAD_DIR or $CUSTOM_APKS_DIR"
     fi
+    echo "Using custom Magisk: $MAGISK_PATH"
 fi
 ANDROID_API=33
 update_gapps_files_name() {
@@ -388,7 +404,13 @@ update_ksu_zip_name() {
     if [ -f "$WORK_DIR/wsa/$ARCH/Tools/kernel" ]; then
         KERNEL_VER=$(getKernelVersion "$WORK_DIR/wsa/$ARCH/Tools/kernel")
     fi
-    KERNELSU_ZIP_NAME=kernelsu-$ARCH-$KERNEL_VER.zip
+    case "$ROOT_SOL" in
+        kernelsu) KSU_NAME=kernelsu ;;
+        sukisu) KSU_NAME=sukisu ;;
+        apatch) KSU_NAME=apatch ;;
+        *) KSU_NAME=kernelsu ;;
+    esac
+    KERNELSU_ZIP_NAME=$KSU_NAME-$ARCH-$KERNEL_VER.zip
     KERNELSU_PATH=$DOWNLOAD_DIR/$KERNELSU_ZIP_NAME
     KERNELSU_INFO="$KERNELSU_PATH.info"
 }
@@ -425,21 +447,28 @@ fi
 if [[ "$WSA_MAJOR_VER" -lt 2211 ]]; then
     ANDROID_API=32
 fi
+if [ "$ROOT_SOL" = "kernelsu" ] || [ "$ROOT_SOL" = "sukisu" ] || [ "$ROOT_SOL" = "apatch" ]; then
+    case "$ROOT_SOL" in
+        kernelsu) KSU_LINK_SCRIPT=generateKernelSULink.py ;;
+        sukisu) KSU_LINK_SCRIPT=generateSuKiSULink.py ;;
+        apatch) KSU_LINK_SCRIPT=generateAPatchLink.py ;;
+    esac
+fi
 if [ -z ${OFFLINE+x} ]; then
     echo "Generating Download Links"
     if [ "$ROOT_SOL" = "magisk" ]; then
         if [ -z ${CUSTOM_MAGISK+x} ]; then
             python3 generateMagiskLink.py "$MAGISK_VER" "$DOWNLOAD_DIR" "$DOWNLOAD_CONF_NAME" || abort
+        else
+            # The Magisk package is provided by the user, only lsp_cust.img
+            # has to be downloaded.
+            python3 generateMagiskLink.py "$MAGISK_VER" "$DOWNLOAD_DIR" "$DOWNLOAD_CONF_NAME" cust_only || abort
         fi
     fi
     if [ "$ROOT_SOL" = "kernelsu" ] || [ "$ROOT_SOL" = "sukisu" ]; then
         update_ksu_zip_name
-        if [ "$ROOT_SOL" = "kernelsu" ]; then
-            python3 generateKernelSULink.py "$ARCH" "$DOWNLOAD_DIR" "$DOWNLOAD_CONF_NAME" "$KERNEL_VER" "$KERNELSU_ZIP_NAME" || KSU_FAILED=1
-        else
-            python3 generateSuKiSULink.py "$ARCH" "$DOWNLOAD_DIR" "$DOWNLOAD_CONF_NAME" "$KERNEL_VER" "$KERNELSU_ZIP_NAME" || KSU_FAILED=1
-        fi
-        if [ "$KSU_FAILED" ] && [ "$AUTO_KERNEL" ]; then
+        python3 "$KSU_LINK_SCRIPT" "$ARCH" "$DOWNLOAD_DIR" "$DOWNLOAD_CONF_NAME" "$KERNEL_VER" "$KERNELSU_ZIP_NAME" || KSU_FAILED=1
+        if [ "${KSU_FAILED:-}" ] && [ "$AUTO_KERNEL" ]; then
             echo "Auto-creating custom kernel from WSABuilds..."
             if [ "$ARCH" = "x64" ]; then
                 KSU_WSABUILDS_URL="https://github.com/MustardChef/WSABuilds/releases/download/Windows_11_2407.40000.4.0_LTS_7_HOTFIX_1/WSA_2407.40000.4.0_x64_Release-Nightly-with-KernelSU-v2.1.2-MindTheGapps-13.0-RemovedAmazon.7z"
@@ -453,25 +482,21 @@ if [ -z ${OFFLINE+x} ]; then
             if [ ! -f "$KERNEL_FILE" ]; then
                 abort "Kernel not found in WSABuilds archive"
             fi
-            (cd "$(dirname "$KERNEL_FILE")" && zip -r "$KERNELSU_PATH" kernel)
+            # The kernel image has to be stored in the zip with the name
+            # expected by the architecture (bzImage / Image).
+            if [ "$ARCH" = "x64" ]; then
+                KERNEL_IMAGE_NAME=bzImage
+            else
+                KERNEL_IMAGE_NAME=Image
+            fi
+            KERNEL_PKG_DIR="$WORK_DIR/kernel-pkg"
+            mkdir -p "$KERNEL_PKG_DIR"
+            cp "$KERNEL_FILE" "$KERNEL_PKG_DIR/$KERNEL_IMAGE_NAME" || abort "Failed to copy kernel"
+            rm -f "$KERNELSU_PATH"
+            (cd "$KERNEL_PKG_DIR" && zip -r "$KERNELSU_PATH" "$KERNEL_IMAGE_NAME") || abort "Failed to package kernel"
             rm -rf "$DOWNLOAD_DIR/kernel-extract" "$DOWNLOAD_DIR/wsa-kernel-temp.7z"
-            KERNELSU_VER="WSABuilds-custom"
-        elif [ "$KSU_FAILED" ]; then
-            abort "No SuKiSU/KernelSU kernel found. Use --auto-kernel to auto-download from WSABuilds."
+            KSU_VER_OVERRIDE="WSABuilds-custom"
         fi
-
-        # shellcheck disable=SC1090
-        source "$WSA_WORK_ENV" || abort
-        # shellcheck disable=SC2153
-        echo "KERNELSU_VER=$KERNELSU_VER" >"$KERNELSU_INFO"
-    fi
-    if [ "$ROOT_SOL" = "apatch" ]; then
-        update_ksu_zip_name
-        python3 generateAPatchLink.py "$ARCH" "$DOWNLOAD_DIR" "$DOWNLOAD_CONF_NAME" "$KERNEL_VER" "$KERNELSU_ZIP_NAME" || abort
-        # shellcheck disable=SC1090
-        source "$WSA_WORK_ENV" || abort
-        # shellcheck disable=SC2153
-        echo "KERNELSU_VER=$KERNELSU_VER" >"$KERNELSU_INFO"
     fi
     if [ "$HAS_GAPPS" ]; then
         update_gapps_files_name
@@ -485,6 +510,20 @@ if [ -z ${OFFLINE+x} ]; then
             abort "We have encountered an error while downloading files."
         fi
     fi
+fi
+if [ "$ROOT_SOL" = "kernelsu" ] || [ "$ROOT_SOL" = "sukisu" ] || [ "$ROOT_SOL" = "apatch" ]; then
+    update_ksu_zip_name
+    if [ ! -f "$KERNELSU_PATH" ]; then
+        # No kernel was downloaded, look for a package provided by the user
+        # in the download directory.
+        python3 "$KSU_LINK_SCRIPT" "$ARCH" "$DOWNLOAD_DIR" "$DOWNLOAD_CONF_NAME" "$KERNEL_VER" "$KERNELSU_ZIP_NAME" local || abort
+    fi
+    # shellcheck disable=SC1090
+    source "$WSA_WORK_ENV" || abort
+    # shellcheck disable=SC2153
+    [ -n "${KERNELSU_VER:-}" ] || KERNELSU_VER="custom"
+    [ -n "${KSU_VER_OVERRIDE:-}" ] && KERNELSU_VER="$KSU_VER_OVERRIDE"
+    echo "KERNELSU_VER=$KERNELSU_VER" >"$KERNELSU_INFO"
 fi
 declare -A FILES_CHECK_LIST=([xaml_PATH]="$xaml_PATH" [vclibs_PATH]="$vclibs_PATH" [UWPVCLibs_PATH]="$UWPVCLibs_PATH")
 if [ "$ROOT_SOL" = "magisk" ]; then
@@ -577,10 +616,15 @@ elif [ "$ROOT_SOL" = "kernelsu" ] || [ "$ROOT_SOL" = "sukisu" ] || [ "$ROOT_SOL"
         abort "Unzip KernelSU failed, package is corrupted?"
     fi
     if [ "$ARCH" = "x64" ]; then
-        mv "$WORK_DIR/kernelsu/bzImage" "$WORK_DIR/kernelsu/kernel"
-    elif [ "$ARCH" = "arm64" ]; then
-        mv "$WORK_DIR/kernelsu/Image" "$WORK_DIR/kernelsu/kernel"
+        KERNEL_IMAGE_NAME=bzImage
+    else
+        KERNEL_IMAGE_NAME=Image
     fi
+    KERNEL_IMAGE_FILE=$(find "$WORK_DIR/kernelsu" -name "$KERNEL_IMAGE_NAME" -type f | head -1)
+    if [ -z "$KERNEL_IMAGE_FILE" ]; then
+        abort "No $KERNEL_IMAGE_NAME found in $KERNELSU_PATH"
+    fi
+    mv "$KERNEL_IMAGE_FILE" "$WORK_DIR/kernelsu/kernel"
     echo "Integrate KernelSU"
     mv "$WORK_DIR/wsa/$ARCH/Tools/kernel" "$WORK_DIR/wsa/$ARCH/Tools/kernel_origin"
     cp "$WORK_DIR/kernelsu/kernel" "$WORK_DIR/wsa/$ARCH/Tools/kernel"

@@ -34,7 +34,7 @@ if [ "$TMPDIR" ] && [ ! -d "$TMPDIR" ]; then
 fi
 WORK_DIR=$(mktemp -d -t wsa-build-XXXXXXXXXX_) || exit 1
 
-DOWNLOAD_DIR=../download
+DOWNLOAD_DIR="$(dirname "$PWD")/download"
 PYTHON_VENV_DIR="$(dirname "$PWD")/python3-env"
 dir_clean() {
     rm -rf "${WORK_DIR:?}"
@@ -70,17 +70,24 @@ if [ -z "$MAGISK_VER" ] || [ -z "$ARCH" ] || [ -z "$TARGET" ]; then
     echo "Usage: $0 <release|debug> <x64|arm64> <initrd>"
     exit 1
 fi
-MAGISK_ZIP=magisk-$MAGISK_VER.zip
-MAGISK_PATH=$DOWNLOAD_DIR/$MAGISK_ZIP
-if [ ! -f "$MAGISK_PATH" ]; then
-    echo "Custom Magisk $MAGISK_ZIP not found"
-    MAGISK_ZIP=app-$MAGISK_VER.apk
-    echo -e "Fallback to $MAGISK_ZIP\n"
-    MAGISK_PATH=$DOWNLOAD_DIR/$MAGISK_ZIP
-    if [ ! -f "$MAGISK_PATH" ]; then
-        abort "Custom Magisk $MAGISK_ZIP not found\nPlease put custom Magisk in $DOWNLOAD_DIR"
+# Look for the Magisk package, first in the download directory (upstream
+# behaviour), then in the apks directory of the repository.
+MAGISK_PATH=""
+CUSTOM_APKS_DIR="$(dirname "$PWD")/apks"
+for candidate in \
+    "$DOWNLOAD_DIR/magisk-$MAGISK_VER.zip" \
+    "$DOWNLOAD_DIR/app-$MAGISK_VER.apk" \
+    "$CUSTOM_APKS_DIR/app-$MAGISK_VER.apk" \
+    "$CUSTOM_APKS_DIR/magisk-$MAGISK_VER.zip"; do
+    if [ -f "$candidate" ]; then
+        MAGISK_PATH="$candidate"
+        break
     fi
+done
+if [ -z "$MAGISK_PATH" ]; then
+    abort "Custom Magisk not found\nPlease put app-$MAGISK_VER.apk or magisk-$MAGISK_VER.zip in $DOWNLOAD_DIR or $CUSTOM_APKS_DIR"
 fi
+echo "Using Magisk package: $MAGISK_PATH"
 echo "Extracting Magisk"
 if [ -f "$MAGISK_PATH" ]; then
     if ! python3 extractMagisk.py "$ARCH" "$MAGISK_PATH" "$WORK_DIR"; then
